@@ -7,112 +7,183 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ===============================
-# MT5 CONFIGURATION
+# CONFIGURATION
 # ===============================
 SYMBOL = "EURUSD"
-TIMEFRAME = mt5.TIMEFRAME_M1  # 1-minute candles
-SPREAD_PIPS = 0.00010         # 1 pip spread
-
-# Risk Management
-TP_PIPS = 0.0010    # 10 pips Take Profit
-SL_PIPS = 0.0008    # 8 pips Stop Loss
-MAX_HOLD_BARS = 24  # Max 24 minutes for M1
-
-# Fetch last N candles for indicators
-LOOKBACK_BARS = 200
-
-# Update interval (seconds)
+TIMEFRAME = mt5.TIMEFRAME_M1
+LOOKBACK_BARS = 20000
 UPDATE_INTERVAL = 5
 
+ACCOUNT_RISK_PERCENT = 1
+SL_PIPS = 0.0008
+TP_PIPS = 0.0010
+
+ATR_PERIOD = 14
+LOW_ATR = 0.00025
+HIGH_ATR = 0.00060
+
+MAGIC_NUMBER = 123456
+
 # ===============================
-# INITIALIZE MT5
+# MT5 INITIALIZE
 # ===============================
 if not mt5.initialize():
-    raise RuntimeError(f"❌ MT5 initialization failed: {mt5.last_error()}")
+    raise RuntimeError("MT5 initialization failed")
 
-print(f"🚀 Connected to MT5 | Account: {mt5.account_info().login} | Server: {mt5.account_info().server}")
+account_info = mt5.account_info()
+balance = account_info.balance
+
+print(f"🚀 Connected | Account: {account_info.login} | Balance: {balance}")
 
 # ===============================
-# FUNCTION TO FETCH LAST N BARS
+# DATA FETCH
 # ===============================
-def get_latest_data(symbol, timeframe, n_bars):
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, n_bars)
-    if rates is None or len(rates) == 0:
-        return None
+def get_data():
+    rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, LOOKBACK_BARS)
     df = pd.DataFrame(rates)
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.set_index('time', inplace=True)
     return df
 
 # ===============================
-# FUNCTION TO CALCULATE INDICATORS
+# INDICATORS
 # ===============================
 def calculate_indicators(df):
-    df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
-    df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
-    df["EMA200"] = df["close"].ewm(span=200, adjust=False).mean()
+    df["EMA20"] = df["close"].ewm(span=20).mean()
+    df["EMA50"] = df["close"].ewm(span=50).mean()
+    df["EMA200"] = df["close"].ewm(span=200).mean()
 
     delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-    rs = avg_gain / avg_loss
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    rs = gain.rolling(14).mean() / loss.rolling(14).mean()
     df["RSI"] = 100 - (100 / (1 + rs))
 
-    df["MACD"] = df["close"].ewm(span=12, adjust=False).mean() - df["close"].ewm(span=26, adjust=False).mean()
-    df["MACD_SIGNAL"] = df["MACD"].ewm(span=9, adjust=False).mean()
+    df["MACD"] = df["close"].ewm(span=12).mean() - df["close"].ewm(span=26).mean()
+    df["MACD_SIGNAL"] = df["MACD"].ewm(span=9).mean()
+
+    hl = df["high"] - df["low"]
+    hc = abs(df["high"] - df["close"].shift())
+    lc = abs(df["low"] - df["close"].shift())
+    tr = np.maximum(hl, np.maximum(hc, lc))
+    df["ATR"] = pd.Series(tr).rolling(ATR_PERIOD).mean()
+
     return df
 
 # ===============================
-# FUNCTION TO GENERATE LIVE SIGNAL
+# SIGNAL
 # ===============================
 def generate_signal(df):
     last = df.iloc[-1]
     score = 0
-    # Trend
+
     score += 1 if last["close"] > last["EMA200"] else -1
-    # EMA crossover
     score += 1 if last["EMA20"] > last["EMA50"] else -1
-    # MACD
     score += 1 if last["MACD"] > last["MACD_SIGNAL"] else -1
-    # RSI
     score += 1 if last["RSI"] < 40 else -1 if last["RSI"] > 60 else 0
 
-    if score >= 3:
-        return "STRONG BUY", score
-    elif score <= -3:
-        return "STRONG SELL", score
-    elif score >= 2:
-        return "BUY (Moderate)", score
-    elif score <= -2:
-        return "SELL (Moderate)", score
+    atr = last["ATR"]
+    if atr > HIGH_ATR:
+        score += 1
+        vol_status = "HIGH"
+    elif atr < LOW_ATR:
+        score -= 1
+        vol_status = "LOW"
     else:
-        return "NEUTRAL", score
+        vol_status = "NORMAL"
+
+    if score >= 3:
+        signal = "BUY"
+    elif score <= -3:
+        signal = "SELL"
+    else:
+        signal = "NEUTRAL"
+
+    return signal, score, vol_status
 
 # ===============================
-# MAIN LOOP FOR LIVE SIGNAL
+# RISK LOT
+# ===============================
+def calculate_lot(balance):
+    risk = balance * ACCOUNT_RISK_PERCENT / 100
+    lot = risk / (SL_PIPS * 100000)
+    return round(lot, 2)
+
+# ===============================
+# CHECK OPEN POSITION
+# ===============================
+def position_exists():
+    positions = mt5.positions_get(symbol=SYMBOL)
+    return positions is not None and len(positions) > 0
+
+# ===============================
+# OPEN TRADE
+# ===============================
+def open_trade(signal, lot):
+    tick = mt5.symbol_info_tick(SYMBOL)
+
+    if signal == "BUY":
+        price = tick.ask
+        sl = price - SL_PIPS
+        tp = price + TP_PIPS
+        order_type = mt5.ORDER_TYPE_BUY
+
+    else:
+        price = tick.bid
+        sl = price + SL_PIPS
+        tp = price - TP_PIPS
+        order_type = mt5.ORDER_TYPE_SELL
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": SYMBOL,
+        "volume": lot,
+        "type": order_type,
+        "price": price,
+        "sl": sl,
+        "tp": tp,
+        "deviation": 20,
+        "magic": MAGIC_NUMBER,
+        "comment": "AI Signal Trade",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+
+    result = mt5.order_send(request)
+    print("🚀 TRADE SENT:", result)
+
+# ===============================
+# MAIN LOOP
 # ===============================
 try:
-    print("📡 Starting live signal updates (press Ctrl+C to stop)...\n")
-    while True:
-        df = get_latest_data(SYMBOL, TIMEFRAME, LOOKBACK_BARS)
-        if df is None:
-            print("⚠️ Failed to fetch data. Retrying...")
-            time.sleep(UPDATE_INTERVAL)
-            continue
+    print("\n📡 AUTO TRADING STARTED...\n")
 
-        df = calculate_indicators(df)
-        live_signal, score = generate_signal(df)
-        last_price = df.iloc[-1]["close"]
-        timestamp = df.index[-1].strftime("%Y-%m-%d %H:%M:%S")
-        
-        print(f"[{timestamp}] Price: {last_price:.5f} | Signal: {live_signal} | Score: {score}/4")
+    while True:
+        df = calculate_indicators(get_data())
+        signal, score, vol = generate_signal(df)
+
+        price = df.iloc[-1]["close"]
+        real_time = datetime.now().strftime("%H:%M:%S")
+
+        lot = calculate_lot(balance)
+
+        print("="*70)
+        print(f"⏰ {real_time} | Price: {price:.5f}")
+        print(f"📊 Signal: {signal} | Score: {score}/5 | Volatility: {vol}")
+        print(f"💵 Lot: {lot}")
+        print("="*70)
+
+        # TRADE LOGIC
+        if not position_exists() and signal in ["BUY", "SELL"]:
+            print("📈 Opening new trade...")
+            open_trade(signal, lot)
+        else:
+            print("⛔ Position exists or no strong signal")
 
         time.sleep(UPDATE_INTERVAL)
 
 except KeyboardInterrupt:
-    print("\n🛑 Stopped by user.")
+    print("Stopped")
 
 finally:
     mt5.shutdown()
