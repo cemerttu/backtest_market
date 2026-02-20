@@ -12,11 +12,12 @@ warnings.filterwarnings('ignore')
 SYMBOL = "EURUSD"
 TIMEFRAME = mt5.TIMEFRAME_M1
 LOOKBACK_BARS = 20000
-UPDATE_INTERVAL = 5
+UPDATE_INTERVAL = 2
 
-ACCOUNT_RISK_PERCENT = 1
-SL_PIPS = 0.0008
-TP_PIPS = 0.0010
+# Binary settings
+STAKE = 10            # $ per trade
+PAYOUT = 0.85         # 85% payout
+EXPIRY_SECONDS = 60   # trade duration
 
 ATR_PERIOD = 14
 LOW_ATR = 0.00025
@@ -71,7 +72,7 @@ def calculate_indicators(df):
     return df
 
 # ===============================
-# SIGNAL
+# SIGNAL GENERATION
 # ===============================
 def generate_signal(df):
     last = df.iloc[-1]
@@ -102,12 +103,10 @@ def generate_signal(df):
     return signal, score, vol_status
 
 # ===============================
-# RISK LOT
+# LOT CALCULATION FROM STAKE
 # ===============================
-def calculate_lot(balance):
-    risk = balance * ACCOUNT_RISK_PERCENT / 100
-    lot = risk / (SL_PIPS * 100000)
-    return round(lot, 2)
+def calculate_lot():
+    return round(STAKE / 100, 2)
 
 # ===============================
 # CHECK OPEN POSITION
@@ -117,21 +116,16 @@ def position_exists():
     return positions is not None and len(positions) > 0
 
 # ===============================
-# OPEN TRADE
+# BINARY TRADE FUNCTION
 # ===============================
 def open_trade(signal, lot):
     tick = mt5.symbol_info_tick(SYMBOL)
 
     if signal == "BUY":
-        price = tick.ask
-        sl = price - SL_PIPS
-        tp = price + TP_PIPS
+        entry_price = tick.ask
         order_type = mt5.ORDER_TYPE_BUY
-
     else:
-        price = tick.bid
-        sl = price + SL_PIPS
-        tp = price - TP_PIPS
+        entry_price = tick.bid
         order_type = mt5.ORDER_TYPE_SELL
 
     request = {
@@ -139,18 +133,83 @@ def open_trade(signal, lot):
         "symbol": SYMBOL,
         "volume": lot,
         "type": order_type,
-        "price": price,
-        "sl": sl,
-        "tp": tp,
+        "price": entry_price,
         "deviation": 20,
         "magic": MAGIC_NUMBER,
-        "comment": "AI Signal Trade",
+        "comment": "Binary Trade",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
-    result = mt5.order_send(request)
-    print("🚀 TRADE SENT:", result)
+    mt5.order_send(request)
+    print("🚀 Trade opened at:", round(entry_price, 5))
+
+    # ===============================
+    # COUNTDOWN TIMER
+    # ===============================
+    start = time.time()
+
+    while True:
+        elapsed = int(time.time() - start)
+        remaining = EXPIRY_SECONDS - elapsed
+
+        if remaining <= 0:
+            break
+
+        tick = mt5.symbol_info_tick(SYMBOL)
+        current_price = tick.bid if signal == "BUY" else tick.ask
+
+        if signal == "BUY":
+            status = "WIN ✅" if current_price > entry_price else "LOSS ❌"
+        else:
+            status = "WIN ✅" if current_price < entry_price else "LOSS ❌"
+
+        print(
+            f"⏳ {remaining}s | Entry: {entry_price:.5f} | "
+            f"Current: {current_price:.5f} | {status}",
+            end="\r"
+        )
+
+        time.sleep(1)
+
+    print("\n⏰ EXPIRY REACHED")
+
+    # ===============================
+    # CLOSE POSITION
+    # ===============================
+    positions = mt5.positions_get(symbol=SYMBOL)
+    if positions:
+        pos = positions[0]
+
+        tick = mt5.symbol_info_tick(SYMBOL)
+        close_price = tick.bid if pos.type == 0 else tick.ask
+
+        close_request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": SYMBOL,
+            "volume": pos.volume,
+            "type": mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY,
+            "position": pos.ticket,
+            "price": close_price,
+            "deviation": 20,
+            "magic": MAGIC_NUMBER,
+        }
+
+        mt5.order_send(close_request)
+
+        # ===============================
+        # FINAL RESULT
+        # ===============================
+        if signal == "BUY":
+            win = close_price > entry_price
+        else:
+            win = close_price < entry_price
+
+        if win:
+            profit = STAKE * PAYOUT
+            print(f"🎉 WIN! +${profit:.2f}")
+        else:
+            print(f"💀 LOSS! -${STAKE}")
 
 # ===============================
 # MAIN LOOP
@@ -165,17 +224,16 @@ try:
         price = df.iloc[-1]["close"]
         real_time = datetime.now().strftime("%H:%M:%S")
 
-        lot = calculate_lot(balance)
+        lot = calculate_lot()
 
         print("="*70)
         print(f"⏰ {real_time} | Price: {price:.5f}")
-        print(f"📊 Signal: {signal} | Score: {score}/5 | Volatility: {vol}")
-        print(f"💵 Lot: {lot}")
+        print(f"📊 Signal: {signal} | Score: {score} | Volatility: {vol}")
+        print(f"💵 Stake: ${STAKE}")
         print("="*70)
 
-        # TRADE LOGIC
         if not position_exists() and signal in ["BUY", "SELL"]:
-            print("📈 Opening new trade...")
+            print("📈 Opening binary trade...")
             open_trade(signal, lot)
         else:
             print("⛔ Position exists or no strong signal")
