@@ -10,7 +10,7 @@ warnings.filterwarnings('ignore')
 # ===============================
 # CONFIGURATION
 # ===============================
-SYMBOL = "GBPUSD"
+SYMBOL = "NZDUSD"
 TIMEFRAME = mt5.TIMEFRAME_M1
 LOOKBACK_BARS = 20000
 UPDATE_INTERVAL = 2
@@ -18,7 +18,7 @@ UPDATE_INTERVAL = 2
 # Binary settings
 STAKE = 10
 PAYOUT = 0.85
-EXPIRY_MINUTES = 2
+EXPIRY_MINUTES = 1
 
 ATR_PERIOD = 14
 LOW_ATR = 0.00025
