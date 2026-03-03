@@ -1,4 +1,3 @@
-
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
@@ -13,7 +12,7 @@ warnings.filterwarnings('ignore')
 SYMBOL = "EURUSD"
 TIMEFRAME = mt5.TIMEFRAME_M1
 LOOKBACK_BARS = 20000
-UPDATE_INTERVAL = 2
+UPDATE_INTERVAL = 2  # seconds
 
 # Binary settings
 STAKE = 10
@@ -49,8 +48,7 @@ def get_data():
 # INDICATORS
 # ===============================
 def calculate_indicators(df):
-
-    # EMA TREND
+    # EMA
     df["EMA20"] = df["close"].ewm(span=20).mean()
     df["EMA50"] = df["close"].ewm(span=50).mean()
     df["EMA200"] = df["close"].ewm(span=200).mean()
@@ -89,7 +87,6 @@ def calculate_indicators(df):
 # SIGNAL ENGINE
 # ===============================
 def generate_signal(df):
-
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -122,16 +119,26 @@ def generate_signal(df):
     else:
         vol_status = "NORMAL"
 
+    # EMA PULLBACK LOGIC
+    pullback_signal = None
+    # Uptrend pullback
+    if last["EMA20"] > last["EMA50"] > last["EMA200"]:
+        if last["close"] < last["EMA20"] and last["close"] > last["EMA20"] * 0.998:
+            pullback_signal = "BUY"
+    # Downtrend pullback
+    elif last["EMA20"] < last["EMA50"] < last["EMA200"]:
+        if last["close"] > last["EMA20"] and last["close"] < last["EMA20"] * 1.002:
+            pullback_signal = "SELL"
+
     # FINAL DECISION
     if breakout_signal:
         return breakout_signal, "BREAKOUT", vol_status
-
     if reversal_signal:
         return reversal_signal, "REVERSAL", vol_status
-
+    if pullback_signal:
+        return pullback_signal, "EMA PULLBACK", vol_status
     if trend_score >= 2:
         return "BUY", "TREND", vol_status
-
     if trend_score <= -2:
         return "SELL", "TREND", vol_status
 
@@ -154,7 +161,6 @@ def position_exists():
 # OPEN TRADE
 # ===============================
 def open_trade(signal, lot):
-
     tick = mt5.symbol_info_tick(SYMBOL)
 
     if signal == "BUY":
@@ -206,7 +212,6 @@ def open_trade(signal, lot):
             f"Current: {current_price:.5f} | {status}",
             end="\r"
         )
-
         time.sleep(1)
 
     print("\n⏰ EXPIRY REACHED")
@@ -216,7 +221,6 @@ def open_trade(signal, lot):
     if positions:
         pos = positions[0]
         tick = mt5.symbol_info_tick(SYMBOL)
-
         close_price = tick.bid if pos.type == 0 else tick.ask
 
         close_request = {
@@ -249,10 +253,8 @@ try:
     print("\n📡 AUTO TRADING STARTED...\n")
 
     while True:
-
         df = calculate_indicators(get_data())
         signal, mode, vol = generate_signal(df)
-
         price = df.iloc[-1]["close"]
         real_time = datetime.now().strftime("%H:%M:%S")
         lot = calculate_lot()
