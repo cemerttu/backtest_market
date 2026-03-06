@@ -5,13 +5,14 @@ from datetime import datetime
 # ===============================
 # CONFIGURATION
 # ===============================
-CSV_FILE = "EURUSD_M30.csv"
-STAKE = 10
-PAYOUT = 0.85
-EXPIRY_MINUTES = 2
+CSV_FILE = "EURUSD_M1.csv"
+STAKE = 10           # fixed bet size per trade
+PAYOUT = 0.85        # binary option payout
+EXPIRY_MINUTES = 2   # how many minutes until option expires
 ATR_PERIOD = 14
-LOW_ATR = 0.00025
-HIGH_ATR = 0.00060
+LOW_ATR = 0.00025    # filter out when market is too quiet
+HIGH_ATR = 0.00060   # filter out when market is too volatile
+MIN_SCORE = 2        # only trade when |score| >= MIN_SCORE
 
 # ===============================
 # LOAD DATA
@@ -95,9 +96,13 @@ def generate_signal(last, prev):
     
     total_score = reversal_score + trend_score + breakout_score
     
-    if total_score > 1: return "BUY", total_score, vol_status
-    elif total_score < -1: return "SELL", total_score, vol_status
-    else: return "NEUTRAL", total_score, vol_status
+    # apply user-configurable threshold so that only stronger signals are taken
+    if total_score >= MIN_SCORE:
+        return "BUY", total_score, vol_status
+    elif total_score <= -MIN_SCORE:
+        return "SELL", total_score, vol_status
+    else:
+        return "NEUTRAL", total_score, vol_status
 
 # ===============================
 # TRADE SIMULATION
@@ -153,3 +158,37 @@ print(f"Total Trades: {total_trades}")
 print(f"Wins: {wins} | Losses: {losses} | Win Rate: {win_rate:.2f}%")
 print(f"Total Profit: ${profit:.2f}")
 print("=====================================================")
+
+# additional diagnostics to help with tuning
+if total_trades:
+    from collections import defaultdict
+    score_stats = defaultdict(lambda: {'count':0,'wins':0,'profit':0.0})
+    for r in results:
+        sc = r['score']
+        win = 1 if r['result']=='WIN' else 0
+        score_stats[sc]['count'] += 1
+        score_stats[sc]['wins'] += win
+        score_stats[sc]['profit'] += (STAKE*PAYOUT if win else -STAKE)
+    print("\nStats by signal score:")
+    for sc in sorted(score_stats):
+        st = score_stats[sc]
+        wr = st['wins']/st['count']*100
+        print(f" score {sc:+} | trades {st['count']:5d} | win {wr:5.1f}% | profit {st['profit']:8.2f}")
+    # compute stats by volatility
+    vol_stats = defaultdict(lambda: {'count':0,'wins':0,'profit':0.0})
+    for r in results:
+        v = r['volatility']
+        win = 1 if r['result']=='WIN' else 0
+        vol_stats[v]['count'] += 1
+        vol_stats[v]['wins'] += win
+        vol_stats[v]['profit'] += (STAKE*PAYOUT if win else -STAKE)
+    print("\nStats by volatility:")
+    for v in sorted(vol_stats):
+        st = vol_stats[v]
+        wr = st['wins']/st['count']*100
+        print(f" {v:7} | trades {st['count']:5d} | win {wr:5.1f}% | profit {st['profit']:8.2f}")
+    avg_win = (STAKE*PAYOUT)
+    avg_loss = STAKE
+    expectancy = (wins/total_trades)*avg_win - (losses/total_trades)*avg_loss
+    print(f"\nExpectancy per trade: ${expectancy:.2f} (positive is good)")
+    print("(You can increase MIN_SCORE or tweak filters to lift the win rate.)")
