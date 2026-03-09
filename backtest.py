@@ -7,12 +7,13 @@ from datetime import datetime
 # ===============================
 CSV_FILE = "EURUSD_M1.csv"
 STAKE = 10           # fixed bet size per trade
-PAYOUT = 0.85        # binary option payout
-EXPIRY_MINUTES = 2   # how many minutes until option expires
+PAYOUT = 0.90        # binary option payout
+EXPIRY_MINUTES = 30     # how many minutes until option expires
+
 ATR_PERIOD = 14
 LOW_ATR = 0.00025    # filter out when market is too quiet
-HIGH_ATR = 0.00060   # filter out when market is too volatile
-MIN_SCORE = 2        # only trade when |score| >= MIN_SCORE
+HIGH_ATR = 0.00035   # filter out when market is too volatile
+MIN_SCORE = 4        # only trade when |score| >= MIN_SCORE
 
 # ===============================
 # LOAD DATA
@@ -142,7 +143,7 @@ for idx in range(20, len(df)-EXPIRY_MINUTES):
             "close": close_price,
             "result": "WIN" if win else "LOSS"
         })
-        print(f"{df.index[idx]} | {signal} | Score: {score} | {vol} | Open: {open_price:.5f} | Close: {close_price:.5f} | {'WIN ✅' if win else 'LOSS ❌'}")
+        print(f"{df.index[idx]} | {signal} | Score: {score} | {vol} | Open: {open_price:.5f} | Close: {close_price:.5f} | {'WIN' if win else 'LOSS'}")
 
 # ===============================
 # SUMMARY
