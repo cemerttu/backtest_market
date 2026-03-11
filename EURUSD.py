@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore")
 # CONFIGURATION
 # ===============================
 SYMBOL = "EURUSD"
-TIMEFRAME = mt5.TIMEFRAME_M1
+TIMEFRAME = mt5.TIMEFRAME_M1       
 CSV_FILE = "EURUSD_M1.csv"
 
 UPDATE_INTERVAL = 10
@@ -21,20 +21,19 @@ ATR_PERIOD = 14
 LOW_ATR = 0.00025
 HIGH_ATR = 0.00060
 
-
 # ===============================
 # LOAD CSV HISTORY
 # ===============================
 def load_csv_history():
 
-    df = pd.read_csv(CSV_FILE)
-
-    df["time"] = pd.to_datetime(df["time"])
-    df.set_index("time", inplace=True)
-
-    df = df[["open","high","low","close"]]
-
-    return df
+    try:
+        df = pd.read_csv(CSV_FILE)
+        df["time"] = pd.to_datetime(df["time"])
+        df.set_index("time", inplace=True)
+        df = df[["open","high","low","close"]]
+        return df
+    except Exception as e:
+        raise RuntimeError(f"Failed to load CSV: {e}")
 
 
 # ===============================
@@ -71,7 +70,9 @@ def calculate_indicators(df):
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
 
-    rs = gain.rolling(14).mean() / loss.rolling(14).mean()
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+    rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
     df["MACD"] = df["close"].ewm(span=12).mean() - df["close"].ewm(span=26).mean()
@@ -84,7 +85,7 @@ def calculate_indicators(df):
 
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
 
-    df["ATR"] = tr.rolling(ATR_PERIOD).mean()
+    df["ATR"] = tr.ewm(alpha=1/ATR_PERIOD, adjust=False).mean()
 
     # BOLLINGER BANDS
     df["BB_MID"] = df["close"].rolling(20).mean()
