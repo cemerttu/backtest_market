@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore")
 # CONFIGURATION
 # ===============================
 SYMBOL = "EURUSD"
-TIMEFRAME = mt5.TIMEFRAME_M5       
+TIMEFRAME = mt5.TIMEFRAME_M1       
 CSV_FILE = "EURUSD_M1.csv"
 
 UPDATE_INTERVAL = 10
